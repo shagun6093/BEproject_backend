@@ -13,7 +13,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Load secret key from .env
-app.config['SECRET_KEY'] = "SECRET_KEY"
+
 
 # MongoDB connection
 client = MongoClient("mongodb://localhost:27017/")
