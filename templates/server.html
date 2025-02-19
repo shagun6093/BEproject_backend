@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Server Chat</title>
+  <!-- Load Socket.IO client library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f2f2f2; }
+    h1 { text-align: center; }
+    #chat-container {
+      width: 80%;
+      max-width: 600px;
+      margin: 20px auto;
+      background: #fff;
+      border: 1px solid #ddd;
+      padding: 10px;
+      height: 400px;
+      overflow-y: scroll;
+      border-radius: 5px;
+    }
+    .message {
+      margin: 5px 0;
+      padding: 8px 12px;
+      border-radius: 5px;
+      max-width: 70%;
+      clear: both;
+    }
+    /* User messages (left) */
+    .user { 
+      background-color: #e0f7fa; 
+      float: left;
+      text-align: left;
+    }
+    /* Server messages (right) */
+    .server { 
+      background-color: #ffe0b2; 
+      float: right;
+      text-align: right;
+    }
+    .timestamp {
+      font-size: 0.8em;
+      color: #555;
+      margin-top: 4px;
+    }
+    #input-container {
+      width: 80%;
+      max-width: 600px;
+      margin: 10px auto;
+      text-align: center;
+    }
+    #message-input { width: 70%; padding: 10px; font-size: 1em; }
+    #send-button { padding: 10px 15px; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h1>Server Chat</h1>
+  <div id="chat-container">
+    <!-- Render previous chat history -->
+    {% for message in chat_history %}
+      <div class="message {{ message.role }}">
+        <div>{{ message.msg }}</div>
+        <div class="timestamp">{{ message.timestamp }}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <div id="input-container">
+    <input type="text" id="message-input" placeholder="Enter your message..." autocomplete="off">
+    <button id="send-button">Send</button>
+  </div>
+
+  <script>
+    var socket = io();
+    var role = "server"; // Role for this client
+    var chatContainer = document.getElementById("chat-container");
+    var messageInput = document.getElementById("message-input");
+    var sendButton = document.getElementById("send-button");
+
+    // Send message on button click
+    sendButton.addEventListener("click", function() {
+      var msg = messageInput.value.trim();
+      if (msg !== "") {
+        socket.emit('send_message', { role: role, msg: msg });
+        messageInput.value = "";
+      }
+    });
+
+    // Listen for new chat messages
+    socket.on('chat_message', function(data) {
+      addMessage(data);
+    });
+
+    // Load chat history on connection
+    socket.on('load_history', function(history) {
+      chatContainer.innerHTML = "";
+      history.forEach(function(data) {
+        addMessage(data);
+      });
+    });
+
+    function addMessage(data) {
+      var div = document.createElement("div");
+      div.className = "message " + data.role;
+      div.innerHTML = "<div>" + data.msg + "</div><div class='timestamp'>" + data.timestamp + "</div>";
+      chatContainer.appendChild(div);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  </script>
+</body>
+</html>
