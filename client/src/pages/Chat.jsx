@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import io from "socket.io-client";
-import Navbar from "./Navbar";
+import Navbar from "../components/Navbar";
 
 const socket = io("http://localhost:8000");
 

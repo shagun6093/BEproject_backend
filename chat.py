@@ -17,7 +17,7 @@ from flask_cors import CORS
 load_dotenv(find_dotenv())
 
 # Connect to MongoDB (ensure MONGO_URI is set in your .env or default to localhost)
-mongo_uri = os.getenv("MONGO_URI", "mongodb+srv://akshayrathod205:pichi777@akshaycluster.ajwgb90.mongodb.net/")
+mongo_uri = os.getenv("MONGO_URI")
 mongo_client = MongoClient(mongo_uri)
 db = mongo_client["mindmend"]
 conversations_collection = db["conversations"]
@@ -71,15 +71,20 @@ def detect_cognitive_distortion(state: State):
 def chat_agent(state: State):
     if state.get("restruct"):
         prompt = (
-            f"User now says: {state['user_input']}\n"
-            f"Cognitive Distortion: {state['distortion']}\n"
-            f"Restructured sentence: {state['restruct']}\n"
-            "You are a cognitive behavioral therapist. Present the restructured sentence supportively."
+            f"User: {state['user_input']}\n"
+            f"Previously detected distortion: {state['distortion']}\n"
+            f"Current restructuring progress: {state['restruct']}\n"
+            "Continue the conversation naturally, helping the user reflect and refine their thought process. "
+            "Provide direct answers when helpful, but keep the dialogue flowing without feeling abrupt. "
+            "Encourage the user to share more, and slowly guide them toward alternative perspectives. "
+            "Keep responses under 75 words unless deeper clarification is absolutely needed."
         )
     else:
         prompt = (
             f"User now says: {state['user_input']}\n"
-            "You are a cognitive behavioral therapist. Help users explore their thoughts supportively."
+            "Respond as a normal chatbot and introduce yourself as Mindmend a CBT-informed chatbot. Engage in a natural conversation, providing direct answers or gentle guidance as needed. "
+            "If no distortion is detected, chat normally while staying attentive to subtle cognitive patterns that might emerge. "
+            "Keep responses under 75 words unless necessary."
         )
     try:
         response = groq_client.chat.completions.create(
@@ -100,7 +105,12 @@ def restructuring_agent(state: State):
             response = groq_client.chat.completions.create(
                 model="llama3-8b-8192",
                 messages=[
-                    {"role": "system", "content": f"Reframe the following thought positively using CBT. Cognitive Distortion: {state['distortion']}"},
+                   {"role": "system", "content": 
+                        f"You're a CBT therapist helping a user recognize and gradually reframe their thoughts. "
+                        f"The user has expressed a thought categorized under '{state['distortion']}'. "
+                        "Don't immediately rewrite their thought—ask gentle questions that guide them toward seeing a different perspective. "
+                        "Keep responses under 75 words unless necessary."
+                    },
                     {"role": "user", "content": state["user_input"]}
                 ]
             )
@@ -117,7 +127,11 @@ def task_assignment_agent(state: State):
             response = groq_client.chat.completions.create(
                 model="llama3-8b-8192",
                 messages=[
-                    {"role": "system", "content": "Generate a simple CBT task to help the user based on the conversation."},
+                    {"role": "system", "content": "You are an innovative cognitive behavioral therapist. Based on the conversation provided, "
+                            "please generate a unique and creative CBT task for the user. Your task should go beyond "
+                            "just reframing negative thoughts and may include activities such as mindfulness exercises, "
+                            "journaling prompts, behavioral experiments, or reflective questions. Ensure that the task "
+                            "is varied and engaging each time."},
                     {"role": "user", "content": str(messages)}
                 ]
             )
