@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Chat Interface</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #f2f2f2;
+      }
+      #chat {
+        width: 500px;
+        margin: 50px auto;
+        background: #fff;
+        padding: 20px;
+        border-radius: 5px;
+      }
+      #messages {
+        list-style-type: none;
+        padding: 0;
+      }
+      #messages li {
+        padding: 8px 10px;
+        margin-bottom: 10px;
+        border-radius: 5px;
+      }
+      .user {
+        background: #d1e7dd;
+        text-align: right;
+      }
+      .ai {
+        background: #f8d7da;
+        text-align: left;
+      }
+      .task {
+        background: #cff4fc;
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 10px;
+        text-align: center;
+      }
+      #input {
+        width: 80%;
+        padding: 10px;
+      }
+      #send,
+      #complete {
+        padding: 10px;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="chat">
+      <ul id="messages"></ul>
+      <div id="task"></div>
+      <input
+        id="input"
+        placeholder="Type your message here..."
+        autocomplete="off"
+      />
+      <button id="send">Send</button>
+      <button id="complete">Complete Session</button>
+    </div>
+    <script src="https://cdn.socket.io/4.3.2/socket.io.min.js"></script>
+    <script>
+      var socket = io();
+      var input = document.getElementById("input");
+      var messages = document.getElementById("messages");
+      var taskDiv = document.getElementById("task");
+
+      document.getElementById("send").onclick = function () {
+        var text = input.value;
+        if (text.trim() === "") return;
+        socket.emit("send_message", { user_input: text });
+        input.value = "";
+      };
+
+      document.getElementById("complete").onclick = function () {
+        // Emit the complete_session event to trigger journal report generation.
+        socket.emit("complete_session", {});
+      };
+
+      socket.on("receive_message", function (data) {
+        messages.innerHTML = "";
+        data.conversation.forEach(function (msg) {
+          var li = document.createElement("li");
+          li.className = msg.type === "HumanMessage" ? "user" : "ai";
+          li.textContent = msg.content;
+          messages.appendChild(li);
+        });
+        if (data.task && data.task.trim() !== "") {
+          var taskElement = document.createElement("div");
+          taskElement.className = "task";
+          taskElement.textContent = "Task: " + data.task;
+          taskDiv.innerHTML = "";
+          taskDiv.appendChild(taskElement);
+        } else {
+          taskDiv.innerHTML = "";
+        }
+      });
+
+      socket.on("session_complete", function (data) {
+        // Display the journal report when session is complete.
+        alert("Journal Report:\n" + data.report);
+      });
+    </script>
+  </body>
+</html>
