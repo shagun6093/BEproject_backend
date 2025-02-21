@@ -58,6 +58,7 @@ class State(MessagesState):
     answer: str
     summary: str
     restruct: str
+    
 
 # Node functions
 def detect_cognitive_distortion(state: State):
