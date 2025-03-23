@@ -20,7 +20,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 load_dotenv(find_dotenv())
 
 # Connect to MongoDB
-mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mongo_uri = os.getenv("MONGO_URI")
 mongo_client = MongoClient(mongo_uri)
 db = mongo_client["chat_db"]
 conversations_collection = db["conversations"]
@@ -210,11 +210,14 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 @app.route("/api/signup", methods=["POST"])
 def signup():
     data = request.get_json()
-    full_name = data.get("fullName")
+    full_name = data.get("name")
     email = data.get("email")
     password = data.get("password")
-    dob = data.get("dob")
-    if not full_name or not email or not password or not dob:
+    phoneNumber = data.get("phoneNumber")
+    age = data.get("age")
+    gender = data.get("gender")
+    
+    if not full_name or not email or not password:
         return jsonify({"error": "Missing required fields"}), 400
     if users_collection.find_one({"email": email}):
         return jsonify({"error": "User already exists"}), 400
@@ -223,7 +226,9 @@ def signup():
         "fullName": full_name,
         "email": email,
         "password": hashed_password,
-        "dob": dob,
+        "phoneNumber": phoneNumber,
+        "age": age,
+        "gender": gender,
         "created_at": datetime.datetime.utcnow()
     }
     users_collection.insert_one(new_user)
@@ -238,7 +243,7 @@ def login():
         return jsonify({"error": "Missing email or password"}), 400
     user = users_collection.find_one({"email": email})
     if user and check_password_hash(user["password"], password):
-        return jsonify({"message": "Login successful", "email": email, "userName": user["fullName"]}), 200
+        return jsonify({"message": "Login successful", "email": email, "userName": user["fullName"], "userId": str(user["_id"])}), 200
     else:
         return jsonify({"error": "Invalid credentials"}), 401
 
@@ -268,10 +273,10 @@ def get_task(email):
 @socketio.on("send_message")
 def handle_message(json_data):
     user_input = json_data.get("user_input")
-    email = json_data.get("email")
-    user_name = json_data.get("user_name")
-    if not user_input or not email or not user_name:
-        return
+    email = json_data.get("akshay@gmail.com")
+    # user_name = json_data.get("user_name")
+    # if not user_input or not email or not user_name:
+    #     return
     initial_state = State(user_input=user_input)
     final_state = assistant.invoke(initial_state, {"configurable": {"thread_id": 123}})
     ai_responses = [msg.content for msg in final_state.get("messages", []) if isinstance(msg, AIMessage)]
@@ -280,7 +285,7 @@ def handle_message(json_data):
     if not doc:
         conversation_data = {
             "email": email,
-            "user_name": user_name,
+            # "user_name": user_name,
             "conversation": [],
             "task": ""
         }
@@ -288,23 +293,26 @@ def handle_message(json_data):
         conversation_data = doc
     conversation_entry = {"user": user_input, "ai": ai_response}
     conversation_data["conversation"].append(conversation_entry)
-    if len(conversation_data["conversation"]) >= 3:
-        state_for_task = State(user_input=user_input)
-        state_for_task["messages"] = final_state.get("messages", [])
-        state_for_task = task_assignment_agent(state_for_task)
-        conversation_data["task"] = state_for_task.get("task", "")
-    else:
-        conversation_data["task"] = conversation_data.get("task", "")
-    conversations_collection.update_one(
-        {"email": email},
-        {"$set": {
-            "email": email,
-            "user_name": user_name,
-            "conversation": conversation_data["conversation"],
-            "task": conversation_data["task"]
-        }},
-        upsert=True
-    )
+    
+    # change this logic while using new model workflow
+    # if len(conversation_data["conversation"]) >= 3:
+    #     state_for_task = State(user_input=user_input)
+    #     state_for_task["messages"] = final_state.get("messages", [])
+    #     state_for_task = task_assignment_agent(state_for_task)
+    #     conversation_data["task"] = state_for_task.get("task", "")
+    # else:
+    #     conversation_data["task"] = conversation_data.get("task", "")
+    # conversations_collection.update_one(
+    #     {"email": email},
+    #     {"$set": {
+    #         "email": email,
+    #         "user_name": user_name,
+    #         "conversation": conversation_data["conversation"],
+    #         "task": conversation_data["task"]
+    #     }},
+    #     upsert=True
+    # )
+    
     socketio.emit("receive_message", {
         "conversation": conversation_data["conversation"],
         "task": conversation_data["task"],
