@@ -34,7 +34,7 @@ def summarize_history(state: State):
 
     # Add prompt to our history
     messages = state["messages"] + [HumanMessage(content=summary_message)]
-    summarizer = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="mixtral-8x7b-32768")    
+    summarizer = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="mistral-saba-24b")    
     response = summarizer.invoke(messages)
 
     summary = response.content

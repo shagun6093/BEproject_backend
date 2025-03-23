@@ -7,6 +7,6 @@ config = {"configurable": {"thread_id": 123}}
 
 initial_state = State(messages=[user], user_input=user.content)
 
-response = assistant.invoke(initial_state, config)
+response = assistant.stream(initial_state, config)
 
-print(response["messages"][-1])
+print(response)

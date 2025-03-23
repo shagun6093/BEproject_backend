@@ -4,8 +4,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv, find_dotenv
 from transformers import BertTokenizer, BertForSequenceClassification
-
-
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_bcrypt import Bcrypt
 import os
 import groq
 from langgraph.graph import MessagesState
@@ -31,8 +31,6 @@ users_collection = db["users"]  # For user authentication
 bert_tokenizer = BertTokenizer.from_pretrained(os.getenv("BERT_TOKENIZER"), token=os.getenv("HF_TOKEN"))
 
 bert_model = BertForSequenceClassification.from_pretrained(os.getenv("BERT_MODEL"), token=os.getenv("HF_TOKEN"))
-
-
 
 
 # Initialize Groq Client
@@ -202,18 +200,49 @@ assistant = workflow.compile(checkpointer=memory)
 
 # Flask + SocketIO setup
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
+# JWT Configuration
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET")  # Change this for production
+jwt = JWTManager(app)
+bcrypt = Bcrypt(app)
+
 
 # Authentication endpoints using email as unique identifier
+# @app.route("/api/signup", methods=["POST"])
+# def signup():
+#     data = request.get_json()
+#     full_name = data.get("name")
+#     email = data.get("email")
+#     password = data.get("password")
+#     phoneNumber = data.get("phoneNumber")
+#     age = data.get("age")
+#     gender = data.get("gender")
+    
+#     if not full_name or not email or not password:
+#         return jsonify({"error": "Missing required fields"}), 400
+#     if users_collection.find_one({"email": email}):
+#         return jsonify({"error": "User already exists"}), 400
+#     hashed_password = generate_password_hash(password)
+#     new_user = {
+#         "fullName": full_name,
+#         "email": email,
+#         "password": hashed_password,
+#         "phoneNumber": phoneNumber,
+#         "age": age,
+#         "gender": gender,
+#         "created_at": datetime.datetime.utcnow()
+#     }
+#     users_collection.insert_one(new_user)
+#     return jsonify({"message": "User created successfully"}), 201
+
 @app.route("/api/signup", methods=["POST"])
 def signup():
     data = request.get_json()
     full_name = data.get("name")
     email = data.get("email")
     password = data.get("password")
-    phoneNumber = data.get("phoneNumber")
+    phone_number = data.get("phoneNumber")
     age = data.get("age")
     gender = data.get("gender")
     
@@ -221,31 +250,63 @@ def signup():
         return jsonify({"error": "Missing required fields"}), 400
     if users_collection.find_one({"email": email}):
         return jsonify({"error": "User already exists"}), 400
-    hashed_password = generate_password_hash(password)
+
+    hashed_password = bcrypt.generate_password_hash(password).decode("utf-8")
     new_user = {
         "fullName": full_name,
         "email": email,
         "password": hashed_password,
-        "phoneNumber": phoneNumber,
+        "phoneNumber": phone_number,
         "age": age,
         "gender": gender,
         "created_at": datetime.datetime.utcnow()
     }
     users_collection.insert_one(new_user)
+    
     return jsonify({"message": "User created successfully"}), 201
+
+
+# @app.route("/api/login", methods=["POST"])
+# def login():
+#     data = request.get_json()
+#     email = data.get("email")
+#     password = data.get("password")
+#     if not email or not password:
+#         return jsonify({"error": "Missing email or password"}), 400
+#     user = users_collection.find_one({"email": email})
+#     if user and check_password_hash(user["password"], password):
+#         return jsonify({"message": "Login successful", "email": email, "userName": user["fullName"], "userId": str(user["_id"])}), 200
+#     else:
+#         return jsonify({"error": "Invalid credentials"}), 401
 
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
     email = data.get("email")
     password = data.get("password")
+    
     if not email or not password:
         return jsonify({"error": "Missing email or password"}), 400
+    
     user = users_collection.find_one({"email": email})
-    if user and check_password_hash(user["password"], password):
-        return jsonify({"message": "Login successful", "email": email, "userName": user["fullName"], "userId": str(user["_id"])}), 200
+    if user and bcrypt.check_password_hash(user["password"], password):
+        access_token = create_access_token(identity=email, expires_delta=datetime.timedelta(days=1))
+        return jsonify({
+            "message": "Login successful",
+            "token": access_token,
+            "email": email,
+            "userName": user["fullName"],
+            "userId": str(user["_id"])
+        }), 200
     else:
         return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route("/api/protected", methods=["GET"])
+@jwt_required()
+def protected():
+    current_user = get_jwt_identity()
+    return jsonify({"message": f"Hello, {current_user}. This is a protected route!"}), 200
+
 
 @app.route("/")
 def index():
@@ -302,16 +363,17 @@ def handle_message(json_data):
     #     conversation_data["task"] = state_for_task.get("task", "")
     # else:
     #     conversation_data["task"] = conversation_data.get("task", "")
-    # conversations_collection.update_one(
-    #     {"email": email},
-    #     {"$set": {
-    #         "email": email,
-    #         "user_name": user_name,
-    #         "conversation": conversation_data["conversation"],
-    #         "task": conversation_data["task"]
-    #     }},
-    #     upsert=True
-    # )
+    
+    conversations_collection.update_one(
+        {"email": email},
+        {"$set": {
+            "email": email,
+            # "user_name": user_name,
+            "conversation": conversation_data["conversation"],
+            "task": conversation_data["task"]
+        }},
+        upsert=True
+    )
     
     socketio.emit("receive_message", {
         "conversation": conversation_data["conversation"],
