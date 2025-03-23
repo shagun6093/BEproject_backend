@@ -1,0 +1,11 @@
+torch
+langgraph
+langchain-core
+python-dotenv
+transformers
+flask
+flask-socketio
+pymongo
+flask-cors
+groq
+werkzeug
