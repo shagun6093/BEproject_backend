@@ -109,38 +109,43 @@ def get_conversations(user_id):
 @socketio.on("send_message")
 def handle_message(json_data):
     user_id = json_data["userId"]
-    user_message = HumanMessage(content=json_data["userInput"])
+    user_message = json_data["userMessage"]
+    user_content = HumanMessage(content=user_message["content"])
     
-    initial_state = State(messages=[user_message], user_input=user_message.content)
+    initial_state = State(messages=[user_content], user_input=user_message["content"])
     config = {"configurable": {"thread_id": user_id}}
     
     response = assistant.invoke(initial_state, config)
     
-    conversation_doc = conversations_collection.find_one({"user_id": user_id})
-    if not conversation_doc:
-        conversation_doc = {
-            "user_id": user_id,
-            "conversation": []
-        }
-        
-    conversation_doc["conversation"].append({
-        "sender": "user",
-        "content": user_message.content,
-        "timestamp": datetime.datetime.utcnow()
-    })
-    
     ai_responses = [msg.content for msg in response["messages"] if isinstance(msg, AIMessage)]
     ai_response = ai_responses[-1]
+
+    # Generate timestamps as ISO format
+    ai_timestamp = datetime.datetime.now().isoformat()
+    user_timestamp = user_message["timestamp"]
+
+    # Update MongoDB using $push for efficiency
+    conversations_collection.update_one(
+        {"user_id": user_id},
+        {"$push": {
+            "conversation": {"sender": "user", "content": user_message["content"], "timestamp": user_timestamp}
+        }},
+        upsert=True
+    )
+
+    conversations_collection.update_one(
+        {"user_id": user_id},
+        {"$push": {
+            "conversation": {"sender": "ai", "content": ai_response, "timestamp": ai_timestamp}
+        }},
+        upsert=True
+    )
     
-    conversation_doc["conversation"].append({
-        "sender": "ai",
+    socketio.emit("receive_message", {
         "content": ai_response,
-        "timestamp": datetime.datetime.utcnow()
+        "sender": "ai",
+        "timestamp": ai_timestamp
     })
-    
-    conversations_collection.update_one({"user_id": user_id}, {"$set": {"conversation": conversation_doc["conversation"]}}, upsert=True)
-    
-    socketio.emit("receive_message", {"sender": "ai", "message": ai_response})
     
     
 if __name__ == "__main__":
