@@ -42,31 +42,51 @@ def summarize_history(state: State):
     
     return {"summary": response.content, "messages": delete_messages}
 
+def classifier_node(state: State):
+    user_input = state["user_input"]
+    
+    prompt = (
+        "You are an expert in cognitive behavioral therapy (CBT). Your task is to analyze the given message "
+        "and determine if it contains a cognitive distortion. If it contains a distortion, respond with 'distortion'. "
+        "If it is a general chat message, respond with 'chat'."
+        "Only respond with 'distortion' or 'chat'.\n\n"
+        f"Message: {user_input}\n"
+    )
+    
+    classifier = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="mistral-saba-24b") 
+    response = classifier.invoke(prompt).content.strip().lower()
+    print(response)
+    
+    return {"needs_distortion_check": response == "distortion"}
 
 # Node functions
 def detect_cognitive_distortion(state: State):
+    print("entered detect node")
     distortion = state.get("distortion", [])
     inputs = bert_tokenizer(state["user_input"], return_tensors='pt', padding=True, truncation=True, max_length=512)
     with torch.no_grad():
         outputs = bert_model(**inputs)
     predicted_class = torch.argmax(outputs.logits, dim=-1).item()
     new_distortion = label_map.get(predicted_class, None)
-    return {"distortion": distortion + [new_distortion]}
+    distortion.append(new_distortion)
+    return {"distortion": distortion}
 
 def chat_agent(state: State):
+    print("entered chat node")
     summary = state.get("summary", "")
     messages= state["messages"][-6:]
-    distortion = state["distortion"][-1:]
+    distortion = state.get("distortion", [])
+    restruct = state.get("restruct", "")
     
-    if state.get("restruct"):
+    if state.get("restruct") != "":
         prompt = (
             f"Previous Conversation Summary: {summary}\n"
             f"User: {messages}\n"
             f"Previously detected distortion: {distortion}\n"
-            f"Current restructuring progress: {state['restruct']}\n"
+            f"Current restructured sentence: {restruct}\n"
             "Continue the conversation naturally, helping the user reflect and refine their thought process. "
             "Provide direct answers when helpful, but keep the dialogue flowing without feeling abrupt. "
-            "Encourage the user to share more keeping the previous conversation in mind, and slowly guide them toward alternative perspectives. "
+            "Present the restructured sentence with respect to the detected distortion while keeping the previous conversation in mind, and slowly guide them toward alternative perspectives. "
             "Keep responses under 75 words unless deeper clarification is absolutely needed."
         )
     else:
@@ -83,11 +103,13 @@ def chat_agent(state: State):
     return {"messages": [AIMessage(content=response.content)]}
 
 def restructuring_agent(state: State):
-    if state["distortion"] != "No":
+    print("entered restructure node")
+    if state["distortion"] != "No Distortion":
         prompt = (
             f"You're a CBT therapist helping a user recognize and gradually reframe their thoughts. "
+            f"User: {state['user_input']} "
             f"The user has expressed a thought categorized under '{state['distortion']}'. "
-            "Don't immediately rewrite their thought—ask gentle questions that guide them toward seeing a different perspective. "
+            "Restrcuture the thought in a way that helps the user see the situation from a different perspective. "
             "Keep responses under 75 words unless necessary."
         )
         response = llm.invoke(prompt)
@@ -97,12 +119,15 @@ def restructuring_agent(state: State):
     
 
 def task_assignment_agent(state: State):
+    print("entered task node")
     messages = state["messages"][-10:]
-    distortions = state["distortion"][-5:]
+    distortions = state.get("distortion", [])
+    if len(distortions) > 2:
+        distortions = distortions[-3:]
     # Generate a task if the accumulated messages are enough (adjust threshold as needed)
     user_messages = [msg.content for msg in messages if isinstance(msg, HumanMessage)]
     
-    if state.get("task", "") != "" and sum(1 for dist in distortions if dist != "No") > 2: 
+    if state.get("task", "") == "" and sum(1 for dist in distortions if dist != "No Distortion") > 2: 
         prompt = (
             f"Previous User Messages: {user_messages}\n"
             f"Previously detected distortions: {distortions}\n"
@@ -148,13 +173,15 @@ workflow.support_multiple_edges = True
 
 workflow.add_node("detect_node", detect_cognitive_distortion)
 workflow.add_node("summarize_conversation", summarize_history)
+workflow.add_node("classifier_node", classifier_node)
 workflow.add_node("chat_node", chat_agent)
 workflow.add_node("restructure_node", restructuring_agent)
 workflow.add_node("task_node", task_assignment_agent)
 
 workflow.add_edge(START, "summarize_conversation")
-workflow.add_edge("summarize_conversation", "detect_node")
-workflow.add_conditional_edges("detect_node", lambda x: x["distortion"] != "No", path_map={True: "restructure_node", False: "chat_node"})
+workflow.add_edge("summarize_conversation", "classifier_node")
+workflow.add_conditional_edges("classifier_node", lambda x: x["needs_distortion_check"], path_map={True: "detect_node", False: "chat_node"})
+workflow.add_conditional_edges("detect_node", lambda x: x["distortion"] != "No Distortion", path_map={True: "restructure_node", False: "chat_node"})
 workflow.add_edge("chat_node", "task_node")
 workflow.add_edge("restructure_node", "chat_node")
 workflow.add_edge("task_node", END)
