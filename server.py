@@ -97,14 +97,33 @@ def protected():
 def index():
     return "Backend is running."
 
-@app.route("/api/conversations/<user_id>", methods=["GET"])
-def get_conversations(user_id):
+@app.route("/api/conversations", methods=["GET"])
+@jwt_required()
+def get_conversations():
+    current_user = get_jwt_identity()
+    user = users_collection.find_one({"email": current_user})
+    user_id = str(user["_id"])
     conversation_doc = conversations_collection.find_one({"user_id": user_id})
     if not conversation_doc:
         return jsonify({"error": "No conversations found"}), 404
     
     conversation = conversation_doc["conversation"]
-    return jsonify({"conversation": conversation}), 200
+    tasks = conversation_doc["tasks"]
+    return jsonify({"conversation": conversation, "tasks": tasks}), 200
+
+@app.route("/api/tasks", methods=["GET"])
+@jwt_required()
+def get_tasks():
+    current_user = get_jwt_identity()
+    user = users_collection.find_one({"email": current_user})
+    user_id = str(user["_id"])
+    
+    conversation_doc = conversations_collection.find_one({"user_id": user_id})
+    if not conversation_doc:
+        return jsonify({"error": "No conversations found"}), 404
+    
+    tasks = conversation_doc["tasks"]
+    return jsonify({"tasks": tasks}), 200
 
 @socketio.on("send_message")
 def handle_message(json_data):
@@ -112,10 +131,36 @@ def handle_message(json_data):
     user_message = json_data["userMessage"]
     user_content = HumanMessage(content=user_message["content"])
     
-    initial_state = State(messages=[user_content], user_input=user_message["content"])
+    initial_data = {
+        "messages": [user_content],
+        "user_input": user_message["content"],
+        "distortion": [],
+        "task": ""
+    }
+    
+    state_doc = conversations_collection.find_one({"user_id": user_id})
+    if state_doc.get("distortion", []):
+        initial_data["distortion"] = state_doc["distortion"]
+        
+    tasks = state_doc.get("tasks", [])
+    if tasks and tasks[-1].get("completed") == False:  # Ensure tasks is non-empty
+        initial_data["task"] = tasks[-1]["description"]
+        
+    
+    initial_state = State(**initial_data)
     config = {"configurable": {"thread_id": user_id}}
     
     response = assistant.invoke(initial_state, config)
+    
+    detected_distortion = response["distortion"]
+    if response["task"] != "":
+        conversations_collection.update_one(
+            {"user_id": user_id},
+            {"$push": {
+                "tasks": {"description": response["task"], "completed": False}
+            }},
+            upsert=True
+        )
     
     ai_responses = [msg.content for msg in response["messages"] if isinstance(msg, AIMessage)]
     ai_response = ai_responses[-1]
@@ -123,23 +168,36 @@ def handle_message(json_data):
     # Generate timestamps as ISO format
     ai_timestamp = datetime.datetime.now().isoformat()
     user_timestamp = user_message["timestamp"]
-
-    # Update MongoDB using $push for efficiency
+    
+    user_entry = {
+        "sender": "user",
+        "content": user_message["content"],
+        "timestamp": user_timestamp,
+        "type": user_message["type"]
+    }
+    
+    # If the message is audio, include URI
+    if user_message["type"] == "audio":
+        user_entry["uri"] = user_message.get("uri", "")
+    
     conversations_collection.update_one(
-        {"user_id": user_id},
-        {"$push": {
-            "conversation": {"sender": "user", "content": user_message["content"], "timestamp": user_timestamp}
-        }},
-        upsert=True
-    )
+    {"user_id": user_id},
+    {
+        "$push": {
+            "conversation": {
+                "$each": [
+                    user_entry,
+                    {"sender": "ai", "content": ai_response, "timestamp": ai_timestamp, "type": "text"}
+                ]
+            },
+        },
+        "$set": {
+            "distortion": detected_distortion  # Replace the entire list with new distortions
+        }
+    },
+    upsert=True
+)
 
-    conversations_collection.update_one(
-        {"user_id": user_id},
-        {"$push": {
-            "conversation": {"sender": "ai", "content": ai_response, "timestamp": ai_timestamp}
-        }},
-        upsert=True
-    )
     
     socketio.emit("receive_message", {
         "content": ai_response,
