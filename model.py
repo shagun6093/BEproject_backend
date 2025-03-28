@@ -146,26 +146,16 @@ def task_assignment_agent(state: State):
     else:
         return {"task": ""}
 
-# def journal_report(state: State):
-#     """
-#     Generate a journal report using the conversation stored in MongoDB.
-#     """
-#     user_id = state.get("user_id")
-#     doc = conversations_collection.find_one({"user_id": user_id})
-#     conversation_array = doc.get("conversation", []) if doc else []
-#     conversation_text = " ".join([f"User: {entry['user']} AI: {entry['ai']}" for entry in conversation_array])
-#     try:
-#         response = groq_client.chat.completions.create(
-#             model="llama3-8b-8192",
-#             messages=[
-#                 {"role": "system", "content": "You are a therapist summarizing and analyzing the user's session progress."},
-#                 {"role": "user", "content": f"Please analyze the following conversation and generate a detailed journal report with progress analysis:\n{conversation_text}"}
-#             ]
-#         )
-#         state["summary"] = response.choices[0].message.content
-#     except Exception:
-#         state["summary"] = "Could not generate journal report."
-#     return state
+def journal_report(feedback, task):
+    print("entered journal node")
+    prompt = (
+        f"Task: {task}\n"
+        f"Feedback: {feedback}\n"
+        "You are a CBT therapist reviewing a user's journal entry. Provide constructive feedback on the user's reflections. "
+    )
+    response = llm.invoke(prompt)
+    return {"ai_feedback": response.content}
+    
 
 # Create workflow and add nodes/edges
 workflow = StateGraph(State)

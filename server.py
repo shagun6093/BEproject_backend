@@ -14,9 +14,10 @@ from flask_socketio import SocketIO, emit
 from pymongo import MongoClient
 import datetime
 from flask_cors import CORS
-from model import assistant
+from model import assistant, journal_report
 from utils import State
 from langchain_core.messages import HumanMessage
+from bson import ObjectId
 
 load_dotenv(find_dotenv())
 
@@ -24,6 +25,7 @@ mongo_uri = os.getenv("MONGO_URI")
 mongo_client = MongoClient(mongo_uri)
 db = mongo_client["chat_db"]
 conversations_collection = db["conversations"]
+tasks_collection = db["tasks"]
 journal_reports_collection = db["journal_reports"]
 users_collection = db["users"]
 
@@ -90,7 +92,21 @@ def login():
 @jwt_required()
 def protected():
     current_user = get_jwt_identity()
-    return jsonify({"message": f"Hello, {current_user}. This is a protected route!"}), 200
+    user = users_collection.find_one({"email": current_user})
+    user_id = str(user["_id"])
+    
+    user_data = {
+        "user_id": user_id, 
+        "fullName": user["fullName"],
+        "email": user["email"],
+        "phoneNumber": user["phoneNumber"],
+        "age": user["age"],
+        "gender": user["gender"]
+    }
+    
+    print(user_data)    
+    
+    return jsonify({"user": user_data, }), 200 
 
 
 @app.route("/")
@@ -108,8 +124,7 @@ def get_conversations():
         return jsonify({"error": "No conversations found"}), 404
     
     conversation = conversation_doc["conversation"]
-    tasks = conversation_doc["tasks"]
-    return jsonify({"conversation": conversation, "tasks": tasks}), 200
+    return jsonify({"conversation": conversation}), 200
 
 @app.route("/api/tasks", methods=["GET"])
 @jwt_required()
@@ -118,12 +133,28 @@ def get_tasks():
     user = users_collection.find_one({"email": current_user})
     user_id = str(user["_id"])
     
-    conversation_doc = conversations_collection.find_one({"user_id": user_id})
-    if not conversation_doc:
+    tasks_cursor = tasks_collection.find({"user_id": user_id})
+    if not tasks_cursor:
         return jsonify({"error": "No conversations found"}), 404
     
-    tasks = conversation_doc["tasks"]
-    return jsonify({"tasks": tasks}), 200
+    tasks_doc = []
+    for task in tasks_cursor:
+        task["_id"] = str(task["_id"])
+        tasks_doc.append(task)
+    
+    return jsonify({"tasks": tasks_doc}), 200
+
+@app.route("/api/singleTask", methods=["GET"])
+@jwt_required()
+def get_single_task():
+    current_user = get_jwt_identity()
+    user = users_collection.find_one({"email": current_user})
+    user_id = str(user["_id"])
+    
+    task_doc = tasks_collection.find_one({"user_id": user_id, "completed": False})
+    task_doc["_id"] = str(task_doc["_id"])
+    
+    return jsonify({"task": task_doc}), 200
 
 @socketio.on("send_message")
 def handle_message(json_data):
@@ -154,10 +185,11 @@ def handle_message(json_data):
     
     detected_distortion = response["distortion"]
     if response["task"] != "":
-        conversations_collection.update_one(
+        tasks_collection.update_one(
             {"user_id": user_id},
-            {"$push": {
-                "tasks": {"description": response["task"], "completed": False}
+            {"$set": {    
+                "description": response["task"],
+                "completed": False,
             }},
             upsert=True
         )
@@ -202,8 +234,35 @@ def handle_message(json_data):
     socketio.emit("receive_message", {
         "content": ai_response,
         "sender": "ai",
-        "timestamp": ai_timestamp
+        "timestamp": ai_timestamp,
+        "task": response["task"]
     })
+    
+@app.route("/api/feedback/<taskId>", methods=["POST"])
+@jwt_required()
+def submit_feedback(taskId):
+    data = request.get_json()
+    feedback = data["feedback"]
+    
+    task_doc = tasks_collection.find_one({"_id": ObjectId(taskId)})
+    if not task_doc:
+        return jsonify({"error": "Task not found"}), 404
+    
+    response = journal_report(feedback, task_doc["description"])
+    summary = response["ai_feedback"]
+    print(summary)
+    
+    tasks_collection.update_one(
+        {"_id": ObjectId(taskId)},
+        {"$set": {
+            "feedback": feedback,
+            "summary": summary,
+            "completed": True
+        }},
+    )
+    
+    return jsonify({"message": "Feedback submitted", "summary": summary}), 200
+
     
     
 if __name__ == "__main__":
