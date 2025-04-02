@@ -7,7 +7,7 @@ model = BertForSequenceClassification.from_pretrained("Tony25503/sentimentcbtber
 label_mapping = {"Excellent": 3, "Very Good": 2, "Good": 1, "Poor": 0}
 sentiment_mapping = {"Positive": 2, "Neutral": 1, "Negative": 0}
 
-summary = "Great effort on attempting the CBT task! You acknowledged your emotions, which is a big step. Constructive feedback: Instead of focusing on the emotions, try to identify specific thoughts that contribute to your underconfidence and self-consciousness. Challenge those thoughts by reappraising them with evidence and reframe them in a more balanced way."
+summary = "Really poor, I couldn't do the task, nothing worked, I was stuck the whole time. I don't know what to do, I am really confused. I don't know how to proceed."
 inputs = tokenizer(summary, return_tensors="pt", padding=True, truncation=True)
 
 # Move inputs to the same device as the model

@@ -101,7 +101,8 @@ def protected():
         "email": user["email"],
         "phoneNumber": user["phoneNumber"],
         "age": user["age"],
-        "gender": user["gender"]
+        "gender": user["gender"],
+        "disorder": user.get("disorder", None),
     }
     
     print(user_data)    
@@ -113,18 +114,49 @@ def protected():
 def index():
     return "Backend is running."
 
+# @app.route("/api/conversations", methods=["GET"])
+# @jwt_required()
+# def get_conversations():
+#     current_user = get_jwt_identity()
+#     user = users_collection.find_one({"email": current_user})
+#     user_id = str(user["_id"])
+#     conversation_doc = conversations_collection.find_one({"user_id": user_id})
+#     if not conversation_doc:
+#         conversation_doc["conversation"] = [{"sender": "ai", "content": "Hello! How can I help you today?", "timestamp": datetime.datetime.now().isoformat(), "type": "text"}]
+    
+#     conversation = conversation_doc["conversation"]
+#     return jsonify({"conversation": conversation}), 200
+
 @app.route("/api/conversations", methods=["GET"])
 @jwt_required()
 def get_conversations():
     current_user = get_jwt_identity()
     user = users_collection.find_one({"email": current_user})
     user_id = str(user["_id"])
+
+    # Try to find the conversation document
     conversation_doc = conversations_collection.find_one({"user_id": user_id})
+
+    # If no conversation exists, create a new one
     if not conversation_doc:
-        return jsonify({"error": "No conversations found"}), 404
-    
-    conversation = conversation_doc["conversation"]
+        new_conversation = {
+            "user_id": user_id,
+            "conversation": [
+                {
+                    "sender": "ai",
+                    "content": "Hello! How can I help you today?",
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "type": "text",
+                }
+            ],
+        }
+        conversations_collection.insert_one(new_conversation)
+        conversation = new_conversation["conversation"]
+    else:
+        conversation = conversation_doc["conversation"]
+
     return jsonify({"conversation": conversation}), 200
+
 
 @app.route("/api/tasks", methods=["GET"])
 @jwt_required()
@@ -152,18 +184,39 @@ def get_single_task():
     user_id = str(user["_id"])
     
     task_doc = tasks_collection.find_one({"user_id": user_id, "completed": False})
+    if not task_doc:
+        return jsonify({"error": "No tasks found"}), 404
+    
     task_doc["_id"] = str(task_doc["_id"])
     
     return jsonify({"task": task_doc}), 200
+
+@app.route("/api/user", methods=["PUT"])
+@jwt_required()
+def update_user():
+    current_user = get_jwt_identity()
+    user = users_collection.find_one({"email": current_user})
+    data = request.get_json()
+    disorder = data.get("disorder")
+    
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "disorder": disorder,
+        }},
+        upsert=True
+    )
+    
+    return jsonify({"message": "User updated successfully"}), 200
 
 @socketio.on("send_message")
 def handle_message(json_data):
     user_id = json_data["userId"]
     user_message = json_data["userMessage"]
-    user_content = HumanMessage(content=user_message["content"])
+    user_content = [HumanMessage(content=user_message["content"])]
     
     initial_data = {
-        "messages": [user_content],
+        "messages": user_content,
         "user_input": user_message["content"],
         "distortion": [],
         "task": ""
@@ -173,26 +226,21 @@ def handle_message(json_data):
     if state_doc.get("distortion", []):
         initial_data["distortion"] = state_doc["distortion"]
         
-    tasks = state_doc.get("tasks", [])
-    if tasks and tasks[-1].get("completed") == False:  # Ensure tasks is non-empty
-        initial_data["task"] = tasks[-1]["description"]
+    tasks = tasks_collection.find_one({"user_id": user_id, "completed": False})
+    if tasks:
+        initial_data["task"] = tasks["description"]
         
     
-    initial_state = State(**initial_data)
     config = {"configurable": {"thread_id": user_id}}
-    
-    response = assistant.invoke(initial_state, config)
+    response = assistant.invoke(initial_data, config)
     
     detected_distortion = response["distortion"]
     if response["task"] != "":
-        tasks_collection.update_one(
-            {"user_id": user_id},
-            {"$set": {    
-                "description": response["task"],
-                "completed": False,
-            }},
-            upsert=True
-        )
+        tasks_collection.insert_one({
+            "user_id": user_id,
+            "description": response["task"],
+            "completed": False,
+        })
     
     ai_responses = [msg.content for msg in response["messages"] if isinstance(msg, AIMessage)]
     ai_response = ai_responses[-1]
@@ -250,18 +298,22 @@ def submit_feedback(taskId):
     
     response = journal_report(feedback, task_doc["description"])
     summary = response["ai_feedback"]
+    rating = response["rating"]
     print(summary)
+    print(rating)
+    
     
     tasks_collection.update_one(
         {"_id": ObjectId(taskId)},
         {"$set": {
             "feedback": feedback,
             "summary": summary,
+            "rating": rating,
             "completed": True
         }},
     )
     
-    return jsonify({"message": "Feedback submitted", "summary": summary}), 200
+    return jsonify({"message": "Feedback submitted", "summary": summary, "rating": rating}), 200
 
     
     

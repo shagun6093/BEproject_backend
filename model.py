@@ -5,7 +5,7 @@ from dotenv import load_dotenv, find_dotenv
 import os
 from typing import Literal
 from langchain_groq import ChatGroq
-from utils import State, bert_tokenizer, bert_model, label_map, memory
+from utils import State, bert_tokenizer, bert_model, label_map, memory, sentinment_tokenizer, sentiment_model, senti_mapping, negative_keywords, neutral_keywords, positive_keywords, device
     
 # def should_continue(state: State) -> Literal["summarize_conversation", "detect_node"]:
 #     """Return the next node to execute."""
@@ -18,7 +18,7 @@ from utils import State, bert_tokenizer, bert_model, label_map, memory
 
 load_dotenv(find_dotenv())
 
-llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama3-8b-8192")
+llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama3-8b-8192", temperature=0.7)
 
 def summarize_history(state: State):
     """Creates a brief summary of recent conversation turns for context."""
@@ -40,7 +40,7 @@ def summarize_history(state: State):
     summary = response.content
     delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][-2:]]
     
-    return {"summary": response.content, "messages": delete_messages}
+    return {"summary": response.content}
 
 def classifier_node(state: State):
     user_input = state["user_input"]
@@ -53,9 +53,14 @@ def classifier_node(state: State):
         f"Message: {user_input}\n"
     )
     
-    classifier = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="mistral-saba-24b") 
+    classifier = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="mistral-saba-24b", temperature=0.3, max_tokens=20) 
     response = classifier.invoke(prompt).content.strip().lower()
     print(response)
+    
+    if response != "distortion":
+        state["distortion"].append("No Distortion")
+        print(state["distortion"])
+        return {"needs_distortion_check": response == "distortion", "distortion": state["distortion"]}
     
     return {"needs_distortion_check": response == "distortion"}
 
@@ -63,6 +68,7 @@ def classifier_node(state: State):
 def detect_cognitive_distortion(state: State):
     print("entered detect node")
     distortion = state.get("distortion", [])
+    print(distortion)
     inputs = bert_tokenizer(state["user_input"], return_tensors='pt', padding=True, truncation=True, max_length=512)
     with torch.no_grad():
         outputs = bert_model(**inputs)
@@ -76,41 +82,59 @@ def chat_agent(state: State):
     summary = state.get("summary", "")
     messages= state["messages"][-6:]
     distortion = state.get("distortion", [])
-    restruct = state.get("restruct", "")
+    # restruct = state.get("restruct", "")
+    user_input = state["user_input"]
     
-    if state.get("restruct") != "":
-        prompt = (
-            f"Previous Conversation Summary: {summary}\n"
-            f"User: {messages}\n"
-            f"Previously detected distortion: {distortion}\n"
-            f"Current restructured sentence: {restruct}\n"
-            "Continue the conversation naturally, helping the user reflect and refine their thought process. "
-            "Provide direct answers when helpful, but keep the dialogue flowing without feeling abrupt. "
-            "Present the restructured sentence with respect to the detected distortion while keeping the previous conversation in mind, and slowly guide them toward alternative perspectives. "
-            "Keep responses under 75 words unless deeper clarification is absolutely needed."
-        )
-    else:
-        prompt = (
-            f"Previous Conversation Summary: {summary}\n"
-            f"User: {messages}\n"
-            "Respond as a normal chatbot and introduce yourself as Mindmend a CBT-informed chatbot. Engage in a natural conversation, providing direct answers or gentle guidance as needed. "
-            "If no distortion is detected, chat normally while staying attentive to subtle cognitive patterns that might emerge. "
-            "Keep responses under 75 words unless necessary."
-        )
+    print(messages)
+    
+    prompt = (
+        f"You're 'MindMend', a CBT-informed chatbot helping users challenge negative thoughts.\n\n"
+        f"Here’s the conversation summary so far: {summary}\n"
+        f"User's previous history: {messages}\n"
+        f"User's latest message: {user_input}\n\n"
+        f"Previously detected distortion: {distortion}\n"
+        "If recent messages contain consecutive 'No Distortion' detections, respond normally—engage in supportive conversation "
+        "without reframing the user's input. Focus on thoughtful insights, validation, and guidance.\n\n"
+        "However, if a cognitive distortion is detected in the latest message, help the user recognize it and reframe their thought "
+        "gently. Offer an alternative perspective without dismissing their feelings. Keep the conversation balanced—blend supportive "
+        "statements.\n\n"
+        "If similar concerns have appeared in previous messages, acknowledge patterns while maintaining an engaging, professional, "
+        "and warm tone.\n\n"
+        "Ensure responses are under 75 words, combining insight, empathy, and meaningful dialogue."
+    )
+
+    # if restruct:
+    #     prompt += (
+    #         f"Previously detected distortion: {distortion}\n"
+    #         f"AI-generated Reframed Thought: {restruct}\n\n"
+    #         "Present the reframed thought to the user in a natural, encouraging way. "
+    #         "Help them reflect on it, guiding them toward insight without forcing agreement. "
+    #         "Keep the conversation balanced—mix statements with thoughtful follow-up questions. "
+    #         "If similar thoughts have been expressed in previous messages, acknowledge them. "
+    #         "Your tone should be warm, professional, and engaging. "
+    #         "Ensure responses are under 75 words, blending supportive insights with meaningful dialogue."
+    #     )
+    # else:
+    #     prompt += (
+    #         "If the user expresses positive feelings, acknowledge and validate them. "
+    #         "Keep the conversation balanced—mix statements with thoughtful follow-up questions. "
+    #         "Your tone should be warm, professional, and engaging. "
+    #         "Ensure responses are under 75 words, blending supportive insights with meaningful dialogue."
+    #     )
     
     response = llm.invoke(prompt)
     
-    return {"messages": [AIMessage(content=response.content)]}
+    return {"messages": [AIMessage(content=response.content)] }
 
 def restructuring_agent(state: State):
     print("entered restructure node")
     if state["distortion"] != "No Distortion":
         prompt = (
-            f"You're a CBT therapist helping a user recognize and gradually reframe their thoughts. "
-            f"User: {state['user_input']} "
-            f"The user has expressed a thought categorized under '{state['distortion']}'. "
-            "Restrcuture the thought in a way that helps the user see the situation from a different perspective. "
-            "Keep responses under 75 words unless necessary."
+            "You're an expert CBT therapist helping a user reframe their thoughts.\n\n"
+            f"User's original message: {state['user_input']}\n"
+            f"Detected Cognitive Distortion: {state['distortion']}\n\n"
+            "Rewrite the user's thought in a way that helps them see it from a healthier, more balanced perspective. "
+            "Make sure the new thought still feels natural and true to their experience."
         )
         response = llm.invoke(prompt)
         return {"restruct": response.content}
@@ -129,18 +153,33 @@ def task_assignment_agent(state: State):
     
     if state.get("task", "") == "" and sum(1 for dist in distortions if dist != "No Distortion") > 2: 
         prompt = (
+            # f"Previous User Messages: {user_messages}\n"
+            # f"Previously detected distortions: {distortions}\n\n"
+            # "You're a CBT therapist. Based on the conversation, create a meaningful and engaging CBT task for the user. "
+            # "This task should go beyond just reframing thoughts and include interactive or reflective activities. "
+            # "Ensure it's unique and adapted to the user's challenges. "
+            # "The task should be clear and concise, with a specific goal. "
+            # "Format the task as follows:\n"
+            # "Task Name:\n"
+            # "Task Description:\n"
+            # "Task Goal:\n"
             f"Previous User Messages: {user_messages}\n"
-            f"Previously detected distortions: {distortions}\n"
-            "You are an innovative cognitive behavioral therapist. Based on the conversation and the distortions provided, "
-            "please generate a unique and creative CBT task for the user. Your task should go beyond "
-            "just reframing negative thoughts and may include activities such as mindfulness exercises, "
-            "journaling prompts, behavioral experiments, or reflective questions. Ensure that the task "
-            "is varied and engaging each time."
-            "Follow the given structure for the output: "
-            "Task Name: \n"
-            "Task Description: \n"
-            "Task Goal: \n"   
+            f"Previously detected distortions: {distortions}\n\n"
+            "You're a Cognitive Behavioral Therapy (CBT) therapist. Your goal is to generate a **practical and structured task** "
+            "that helps the user actively work on their cognitive distortions.\n\n"
+            "### Task Requirements:\n"
+            "- The task must involve **real-world actions or structured self-reflection** (e.g., journaling, thought records, behavioral experiments).\n"
+            "- Avoid abstract storytelling or metaphorical journeys.\n"
+            "- Focus on **CBT-based exercises** like identifying distortions, evidence collection, or perspective shifting.\n"
+            "- The task should be **simple, actionable, and specific** to the user’s messages and distortions.\n"
+            "- Keep it concise while ensuring **clear steps** the user can follow.\n\n"
+            "Format:"
+            '"Task Name": "Short, clear task title",\n'
+            '"Task Description": "Step-by-step instructions for the user to complete the task.",\n'
+            '"Task Goal": "The intended benefit of completing the task."\n'
+            "}"   
         )
+        
         response = llm.invoke(prompt)
         return {"task": response.content}
     else:
@@ -148,17 +187,30 @@ def task_assignment_agent(state: State):
 
 def journal_report(feedback, task):
     print("entered journal node")
+        # Step 2: *Model-based prediction if no keyword matches*
+    inputs = sentinment_tokenizer(feedback, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    inputs = {k: v.to(device) for k, v in inputs.items()}  # Move inputs to device
+
+    with torch.no_grad():
+        logits = sentiment_model(**inputs).logits
+        
+    prediction = torch.argmax(logits, dim=1).item()
+    
     prompt = (
         f"Task: {task}\n"
         f"Feedback: {feedback}\n"
         "You are a CBT therapist reviewing a user's journal entry. Provide constructive feedback on the user's reflections. "
+        "If the feedback is unsatisfactory, provide suggestions for improvement. "
+        "If the feedback is satisfactory, provide positive reinforcement. "
+        "Ensure that the responses are under 150 words."
     )
+    
     response = llm.invoke(prompt)
-    return {"ai_feedback": response.content}
+    return {"ai_feedback": response.content, "rating": prediction}
     
 
 # Create workflow and add nodes/edges
-workflow = StateGraph(State)
+workflow = StateGraph(state_schema=State)
 workflow.support_multiple_edges = True
 
 workflow.add_node("detect_node", detect_cognitive_distortion)
@@ -171,9 +223,10 @@ workflow.add_node("task_node", task_assignment_agent)
 workflow.add_edge(START, "summarize_conversation")
 workflow.add_edge("summarize_conversation", "classifier_node")
 workflow.add_conditional_edges("classifier_node", lambda x: x["needs_distortion_check"], path_map={True: "detect_node", False: "chat_node"})
-workflow.add_conditional_edges("detect_node", lambda x: x["distortion"] != "No Distortion", path_map={True: "restructure_node", False: "chat_node"})
+# workflow.add_conditional_edges("detect_node", lambda x: x["distortion"] != "No Distortion", path_map={True: "restructure_node", False: "chat_node"})
+workflow.add_edge("detect_node", "chat_node")
 workflow.add_edge("chat_node", "task_node")
-workflow.add_edge("restructure_node", "chat_node")
-workflow.add_edge("task_node", END)
+# workflow.add_edge("restructure_node", "chat_node")
+# workflow.add_edge("task_node", END)
 
 assistant = workflow.compile(checkpointer=memory)
